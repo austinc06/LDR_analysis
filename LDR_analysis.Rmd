@@ -1,13 +1,16 @@
 ---
 title: "LDR text history analysis"
 author: "Austin Chou"
-date: '`r format(Sys.time(), "%Y-%m-%d")`'
-output: 
+date: "`r format(Sys.time(), "%Y-%m-%d")`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
   html_document:
-    toc: TRUE
-    toc_depth: 3
-    toc_floating: TRUE
     code_folding: hide
+    toc: yes
+    toc_depth: 3
+    toc_floating: yes
 ---
 
 The following is an exercise in R programming and data visualization as inspired 
