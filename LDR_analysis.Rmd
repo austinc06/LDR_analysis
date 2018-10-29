@@ -591,7 +591,7 @@ p = ggplot(data = LDR_words[,c("Word","Him")] %>%
                 .[order(.$Him, decreasing = TRUE),] %>%
                 .[1:10,],
            aes(x = reorder(Word, -Him), y = Him)) + 
-     geom_bar(stat = "identity", fill = "lightcoral") +
+     geom_bar(stat = "identity", fill = "cornflowerblue") +
      xlab("Word") +
      ylab("Number of appearances") +
      ggtitle("Most typed words by Him")
@@ -605,7 +605,7 @@ p = ggplot(data = LDR_words[,c("Word","Her")] %>%
                 .[order(.$Her, decreasing = TRUE),] %>%
                 .[1:10,],
            aes(x = reorder(Word, -Her), y = Her)) + 
-     geom_bar(stat = "identity", fill = "cornflowerblue") + #lightseagreen
+     geom_bar(stat = "identity", fill = "lightcoral") + #lightseagreen
      xlab("Word") +
      ylab("Number of appearances") +
      ggtitle("Most typed words by Her")

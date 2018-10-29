@@ -1,8 +1,0 @@
-"0","# Check what rows don't begin with ""["" don't actually have the date-person-text"
-"0","#  format that we are looking for each row"
-"0","x = dplyr::filter(history_a, substring(V1,1,1) != ""["")"
-"0","cat(paste(nrow(x), ""entries don't start with '['""))"
-"1","1009 entries don't start with '['"
-"0","cat(""Entries that don't start with '[' but include the '[' character (potentially have a time - person - text entry in the loaded entry):"")"
-"1","Entries that don't start with '[' but include the '[' character (potentially have a time - person - text entry in the loaded entry):"
-"0","print(dplyr::filter(x, grepl(""\\["", V1)) %>% data.table())"

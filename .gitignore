@@ -3,3 +3,5 @@
 *.pkl
 *.xlsx
 AC_ET_history.txt
+*.Rproj.user
+.Rproj.user/*

@@ -1,7 +1,0 @@
-"0","```r
-ggplot(data = for_analysis, aes(x = PERSON, y = num_char, color = PERSON)) +
-     geom_point() +
-     xlab(\"\") +
-     ylab(\"Number of characters per text\") +
-     ggtitle(\"Number of characters per text\")
-```"
