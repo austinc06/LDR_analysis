@@ -1,0 +1,648 @@
+---
+title: "LDR text history analysis"
+author: "Austin Chou"
+date: '`r format(Sys.time(), "%Y-%m-%d")`'
+output: 
+  html_document:
+    toc: TRUE
+    toc_depth: 3
+    toc_floating: TRUE
+    code_folding: hide
+---
+
+The following is an exercise in R programming and data visualization as inspired 
+by several Reddit posts (on r/dataisbeautiful). The text history from Whatsapp 
+was downloaded on 10/01/18.
+
+```{r load_library, include=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(reshape2))
+suppressPackageStartupMessages(library(wordcloud))
+suppressPackageStartupMessages(library(tm))
+suppressPackageStartupMessages(library(data.table))
+
+rewrite = FALSE
+
+# suppressPackageStartupMessages(library(aws.s3))
+# suppressPackageStartupMessages(library(data.table))
+# suppressPackageStartupMessages(library(tableone))
+# suppressPackageStartupMessages(library(janitor))
+# suppressPackageStartupMessages(library(kableExtra))
+# suppressPackageStartupMessages(library(knitr))
+# suppressPackageStartupMessages(library(DT))
+# suppressPackageStartupMessages(library(lazyeval))
+# suppressPackageStartupMessages(library(lubridate))
+
+base_breaks = function(n = 5) {
+     #function to call in ggplot for automatically breaking log scale tick marks
+     function(x) {
+          axisTicks(log10(range(x, na.rm = TRUE)), log = TRUE, n = n)
+     }
+}
+
+run_chunks = data.frame(curate = FALSE,
+                        plots = TRUE,
+                        curate_word = FALSE,
+                        plot_word = TRUE)
+```
+# Dataset curation
+The following steps were taken to curate the dataset:  
+* Remove "image omitted", "Missed voice call", "audio omitted", "video omitted",
+"GIF omitted", "document omitted" entries.  
+* Recombine entries that were incorrectly split by using "\n" (newline) as the 
+original separator when reading the txt file.  
+* Divide the entries into specific columns:  
+-DATE  
+-TIME  
+-PERSON  
+-TEXT  
+* Remove PERSONS who are not the primary texters  
+* Remove emoticon characters  
+* Recombine entries that are actually part of the same quoted chat entry  
+* Derive YEAR, HOUR, day of the week (weekday), number of characters (num_char), and number of words (num_words)
+of each entry  
+
+```{r load_text, eval=run_chunks[["curate"]]}
+history = read.table(file = "AC_ET_history.txt", 
+                     sep = "\n", 
+                     quote = "", 
+                     stringsAsFactors = FALSE)
+cat(paste(nrow(history), "total entries in loaded text history"))
+
+# Remove 'image omitted' entries
+image_entries = dplyr::filter(history, grepl("image omitted", V1))
+cat(paste(nrow(image_entries), 
+          "'image omitted' entries; removed; removed from dataset"))
+history_a = dplyr::setdiff(history, image_entries)
+
+# Remove 'Missed voice call' entries
+missed_calls = dplyr::filter(history_a, grepl("â€ŽMissed voice call", V1))
+cat(paste(nrow(missed_calls), 
+          "'Missed voice call' entries; removed from dataset"))
+history_a = dplyr::setdiff(history_a, missed_calls)
+
+# Remove 'audio omitted' entries
+audio_entries = dplyr::filter(history_a, grepl("audio omitted", V1))
+cat(paste(nrow(audio_entries), 
+          "'audio omitted' entries; removed from dataset"))
+history_a = dplyr::setdiff(history_a, audio_entries)
+
+# Remove 'video omitted' entries
+video_entries = dplyr::filter(history_a, grepl("video omitted", V1))
+cat(paste(nrow(missed_calls), 
+          "'video omitted' entries; removed from dataset"))
+history_a = dplyr::setdiff(history_a, video_entries)
+
+# Remove 'GIF omitted' entries
+gif_entries = dplyr::filter(history_a, grepl("GIF omitted", V1))
+cat(paste(nrow(missed_calls), 
+          "'GIF omitted' entries; removed from dataset"))
+history_a = dplyr::setdiff(history_a, gif_entries)
+
+# Remove 'document omitted' entries
+doc_entries = dplyr::filter(history_a, grepl("document omitted", V1))
+cat(paste(nrow(doc_entries),
+          "'document omitted' entries; removed from dataset"))
+history_a = dplyr::setdiff(history_a, doc_entries)
+
+cat(paste(nrow(history_a), "entries after removing 'omitted' classification entries"))
+
+```
+
+```{r process_[_entries, eval=run_chunks[["curate"]]}
+# Check what rows don't begin with "[" don't actually have the date-person-text
+#  format that we are looking for each row
+x = dplyr::filter(history_a, substring(V1,1,1) != "[")
+cat(paste(nrow(x), "entries don't start with '['"))
+
+cat("Entries that don't start with '[' but include the '[' character (potentially have a time - person - text entry in the loaded entry):")
+print(dplyr::filter(x, grepl("\\[", V1)) %>% data.table())
+```
+
+
+```{r process_entries_without_[, eval=run_chunks[["curate"]]}
+# If a text entry doesn't start with "[", it was a new line within a longer text
+#  append the entry to the previous entry.
+# Use a while loop to check each entry. If the entry doesn't start with "[",
+#  then concatenate it to the previous entry
+z = data.frame("V1" = NA)
+
+print(Sys.time())
+index = 1
+while (index <= nrow(history_a)) {
+     # Check if current entry doesn't start with "["
+     if (index > 1 & substring(history_a$V1[index], 1, 1) != "[") {
+          history_a$V1[index - 1] = paste(history_a$V1[index - 1],
+                                          history_a$V1[index])
+          
+          # Recordkeeping purposes
+          z = rbind(z, history_a[index,])
+          
+          # Remove the entry that just got attached
+          history_a = history_a[-c(index), , drop = FALSE] #Drop keeps the data-
+          #frame format
+     } else {
+          index = index + 1
+     }
+     
+     #if (index %% 1000 == 0) {
+     #     print(index)
+     #}
+}
+print(Sys.time())
+
+z = z[!is.na(z$V1),] %>%
+     as.data.frame()
+
+cat(paste(nrow(history_a),"entries after remerging lines that belong to the same message"))
+```
+
+```{r split_into_columns, eval=run_chunks[["curate"]]}
+# Split into DATE, TIME, PERSON, TEXT
+print(Sys.time())
+history_a = history_a %>%
+     rowwise() %>%
+     mutate("DATE" = strsplit(V1, split = "]") %>% #Get Time section
+                 unlist() %>%
+                 .[1] %>%
+                 strsplit(split = ",") %>% #Get date
+                 unlist() %>%
+                 .[1] %>%
+                 substring(first = 2),
+            "TIME" = strsplit(V1, split = "]") %>% #Get Time section
+                 unlist() %>%
+                 .[1] %>%
+                 strsplit(split = ",") %>% #Get clock time
+                 unlist() %>%
+                 .[2] %>%
+                 trimws(),
+            "PERSON" = strsplit(V1, split = "]") %>% #Get Name section
+                 unlist() %>%
+                 .[2:length(.)] %>% #In case there is a "]" in the text, we need to restitch the string
+                 paste(collapse = "]") %>% 
+                 strsplit(split = ":") %>%
+                 unlist() %>%
+                 .[1] %>%
+                 trimws() %>%
+                 strsplit(split = " ") %>% #Keep first name only
+                 unlist() %>%
+                 .[1],
+            "TEXT" = strsplit(V1, split = "]") %>% #Get Text section
+                 unlist() %>%
+                 .[2:length(.)] %>% #In case there is a "]" in the text, we need to restitch the string
+                 paste(collapse = "]") %>% 
+                 strsplit(split = ":") %>%
+                 unlist() %>%
+                 .[2:length(.)] %>% #In case there is a ":" in the text, we need to restitch the string
+                 paste(collapse = ":") %>%
+                 trimws()) %>%
+     as.data.frame()
+print(Sys.time())
+
+history_a = history_a[,colnames(history_a) != "V1"]
+if (rewrite) {
+     write.csv(history_a, file = "history_draft_1.csv", row.names = FALSE)
+}
+#history_a = read.csv("20181002_history_draft.csv", stringsAsFactors = FALSE)
+
+#Convert TIME to 24hr clock instead of AM/PM. And remove seconds
+history_a = history_a %>%
+     rowwise() %>%
+     mutate(TIME = strptime(TIME, format = "%I:%M:%S %p") %>%
+                 format(format = "%H:%M:%S")) %>%
+     as.data.frame()
+```
+
+```{r fix_PERSONS, eval=run_chunks[["curate"]]}
+# Remove persons != Elaine or Austin
+other_people = history_a[!(grepl("Elaine", history_a$PERSON) | 
+                                grepl("Austin", history_a$PERSON)),]
+history_a = dplyr::setdiff(history_a, other_people)
+cat(paste(nrow(other_people), "entries are quotes from others"))
+cat(paste(nrow(history_a), "entries directly said by Elaine or Austin"))
+
+#Readjust "Â Austin" to "Austin
+history_a[grepl("Â", history_a$PERSON),"PERSON"] = "Austin"
+
+#Remove entries lacking english characters and digits; usually emoticons
+history_a$TEXT = lapply(history_a$TEXT, 
+                        iconv, from = "UTF-8", to = "ASCII", sub = "") %>%
+     unlist()
+
+
+
+# remove_odd_char = history_a[grepl("ðŸ˜™", history_a$TEXT),]
+# history_a = history_a[!grepl("ðŸ˜™", history_a$TEXT),]
+# cat(paste("After removing 'ðŸ˜™' entries:", 
+#             nrow(history_a), 
+#             "text entries remaining"))
+cat(paste(nrow(history_a), "entries in text history"))
+if (rewrite) {
+     write.csv(history_a, file = "history_draft_2.csv", row.names = FALSE)
+}
+```
+
+```{r more_cleanup, eval=run_chunks[["curate"]]}
+# Remove any entries where TEXT == null
+no_text = history_a[history_a$TEXT == "", ]
+history_a = dplyr::setdiff(history_a, no_text)
+cat(paste(nrow(history_a), 
+          "entries in text history after removing entries with no text"))
+
+# More cleanup
+#  Some entries are clearly quoted. They are converted with a format:
+#  Date: m/y time
+#  Time: NA
+#  Person: person
+#  Text: Text
+index = 1
+z = NA
+print(Sys.time())
+while (index < nrow(history_a)) {
+     # Check if current entry follows the Date format
+     if (index > 1 & is.na(history_a[index,"TIME"])) {
+          #Combine the entry to one line and append to previous
+          history_a[index-1, "TEXT"] = paste0(history_a[index-1,"TEXT"],
+                                              " \n ",
+                                              "[",
+                                              history_a[index,"DATE"],
+                                              "] ",
+                                              history_a[index,"PERSON"],
+                                              ": ",
+                                              history_a[index,"TEXT"])
+          # Recordkeeping purposes
+          z = rbind(z, history_a[index,])
+          
+          # Remove the entry that just got attached
+          history_a = history_a[-c(index), , drop = FALSE]
+     } else {
+          index = index + 1
+     }
+}
+print(Sys.time())
+
+cat(paste(nrow(history_a),
+          "entries after remerging lines that are the same quote"))
+
+if (rewrite) {
+     write.csv(history_a, file = "history_draft_3.csv", row.names = FALSE)
+}
+```
+
+```{r add_extra_columns, eval=run_chunks[["curate"]]}
+history_a = read.csv("history_draft_3.csv", stringsAsFactors = FALSE)
+
+for_analysis = history_a %>%
+     rowwise() %>%
+     mutate(YEAR = mdy(DATE) %>% year(),
+            HOUR = strptime(TIME, "%H:%M:%S") %>% hour(),
+            weekday = weekdays(mdy(DATE)),
+            num_char = nchar(TEXT),
+            num_words = TEXT %>%
+                 strsplit(split = " ") %>%
+                 unlist() %>% 
+                 length()) %>%
+     as.data.frame()
+
+for_analysis = for_analysis %>%
+     rowwise() %>%
+     mutate(PERSON = ifelse(PERSON == "Austin",
+                            "Him",
+                            "Her")) %>%
+     ungroup() %>%
+     as.data.frame()
+
+
+if (rewrite) {
+     write.csv(for_analysis, file = "history_draft_4.csv", row.names = FALSE)
+}
+```
+
+# Initial plots
+```{r load_clean_history, eval=run_chunks[["plots"]]}
+for_analysis = read.csv("history_draft_4.csv", stringsAsFactors = FALSE)
+```
+
+## Texts sent: By person
+```{r by_person, eval=run_chunks[["plots"]]}
+# Plot how many texts were produced by each person
+ggplot(data = for_analysis, aes(x = PERSON)) +
+     geom_bar(aes(fill = PERSON)) + 
+     xlab("") +
+     ylab("Number of messages") +
+     ggtitle("Number of messages sent by each person (total history)")
+```
+
+## Texts sent: By time
+### By Year
+```{r by_year, eval=run_chunks[["plots"]]}
+a = table(for_analysis$PERSON, for_analysis$YEAR) %>%
+     melt() %>%
+     plyr::rename(c("Var1" = "PERSON",
+                    "Var2" = "YEAR",
+                    "value" = "COUNT"))
+
+ggplot(data = a, aes(x = YEAR, y = COUNT, color = PERSON)) +
+     geom_line() +
+     xlab("Year") +
+     ylab("Number of messages sent") + 
+     ggtitle("Number of messages sent by year")
+```
+
+### By Hour of day
+```{r by_hour, eval=run_chunks[["plots"]]}
+a = table(for_analysis$PERSON, for_analysis$HOUR) %>% 
+     melt() %>% 
+     plyr::rename(c("Var1" = "PERSON",
+                    "Var2" = "HOUR",
+                    "value" = "COUNT"))
+
+ggplot(data = a, aes(x = HOUR, y = COUNT, color = PERSON)) +
+     geom_line() + 
+     xlab("Hour of the day") +
+     ylab("Total number of text messages") +
+     ggtitle("Total number of text messages per hour of the day (all history)")
+```
+
+### By day of the week
+```{r by_weekday, eval=run_chunks[["plots"]]}
+for_analysis$weekday = factor(for_analysis$weekday,
+                              levels = c("Monday", "Tuesday", "Wednesday", "Thursday", 
+                                         "Friday", "Saturday", "Sunday"))
+
+ggplot(data = for_analysis, aes(x = weekday, fill = PERSON)) +
+     geom_bar(position = position_dodge(width = 1)) +
+     xlab("Day of the Week") +
+     ylab("Total number of text messages")
+
+ggplot(data = for_analysis, aes(x = weekday)) +
+     geom_bar()
+```
+
+
+## Texts by length
+### Number of characters
+```{r by_char_count, eval=run_chunks[["plots"]]}
+ggplot(data = for_analysis, aes(x = PERSON, y = num_char, color = PERSON)) +
+     geom_point() +
+     geom_boxplot() +
+     scale_y_log10(breaks = base_breaks()) +
+     xlab("") +
+     ylab("Number of characters per text") +
+     ggtitle("Number of characters per text")
+
+ggplot(data = group_by(for_analysis, PERSON, YEAR) %>%
+            summarise(mean_chars = mean(num_char)),
+       aes(x = YEAR, y = mean_chars, color = PERSON)) +
+     geom_point() +
+     geom_line() +
+     expand_limits(y = 0) +
+     xlab("Year") +
+     ylab("Average number of characters per text") +
+     ggtitle("Average number of characters per text by year")
+```
+
+### Number of words
+```{r by_word_count, eval=run_chunks[["plots"]]}
+ggplot(data = for_analysis, #%>% 
+            #rowwise() %>% 
+            #mutate(num_words = log10(num_words)), 
+       aes(x = PERSON, y = num_words, color = PERSON)) +
+     geom_point() +
+     geom_boxplot() +
+     scale_y_log10(breaks = base_breaks()) +
+     xlab("") +
+     ylab("Number of words per text") +
+     ggtitle("Number of words per text")
+
+ggplot(data = group_by(for_analysis, PERSON, YEAR) %>%
+            summarise(mean_words = mean(num_words)),
+       aes(x = YEAR, y = mean_words, color = PERSON)) +
+     geom_point() +
+     geom_line() +
+     expand_limits(y = 0) +
+     xlab("Year") +
+     ylab("Average number of words per text") +
+     ggtitle("Average number of words per text by year")
+
+t.test(for_analysis[for_analysis$PERSON == "Him","num_words"] %>% log10(),
+       for_analysis[for_analysis$PERSON == "Her", "num_words"] %>% log10())
+```
+
+
+
+# Word usage analysis
+## Curate Words
+The following steps were taken to curate unique words:  
+* Split each text entry by " "  
+* Remove punctuation at the start or end of each word  
+* Apply tolower  
+* Keep only entries that have alphabet characters (removes punctuations that are part of emoticons)  
+* Keep track of word frequency by PERSON  
+* Remove single letter entries and stopwords  
+```{r curate_word_freq, eval=run_chunks[["curate_word"]]}
+# Clean load
+for_analysis = read.csv("history_draft_4.csv", stringsAsFactors = FALSE)
+
+remove_last_punct = function(string, 
+                             punctuations = c(".", ",", ";", ":", "/", "?", "!",
+                                              ")", "'", '"')) {
+     #' Take string and remove specific punctuations if they are the last 
+     #'  character in the string
+     #'
+     #' Input: String of interest (string),
+     #'  list of punctuations to check and remove (list of strings)
+     #' Output: Adjusted string
+     
+     while (substr(string, nchar(string), nchar(string)) %in% punctuations) {
+          string = substr(string, 1, nchar(string)-1)
+     }
+     
+     return(string)
+}
+
+remove_first_punct = function(string,
+                              punctuations = c("(", "'", '"', ":")) {
+     #' Take string and remove specific punctuations if they are the first 
+     #'  character in the string
+     #'
+     #' Input: String of interest (string),
+     #'  list of punctuations to check and remove (list of strings)
+     #' Output: Adjusted string
+     
+     if (substr(string, 1, 1) %in% punctuations) {
+          return(substr(string, 2, nchar(string)))
+     } else {
+          return(string)
+     }                            
+}
+
+# Create two separate datatables, then merge later
+AC = data.frame("Word" = "",
+                "Count" = 0)
+ET = data.frame("Word" = "",
+                "Count" = 0)
+
+for (entry in 1:nrow(for_analysis)) {
+     # # Track current entry
+     # if (entry %% 1000 == 1) {
+     #      cat(paste0("Entry [",entry, "] at Time:", Sys.time()))
+     # }
+     
+     # Get current TEXT entry
+     txt = for_analysis[entry, "TEXT"] %>%
+          strsplit(split = " ") %>%
+          unlist() %>%
+          lapply(remove_last_punct) %>% 
+          lapply(remove_first_punct) %>%
+          lapply(tolower) %>%
+          unlist() %>%
+          .[grepl("[[:alpha:]]", .)] #Keep only entries with alphabet characters 
+     # (removes numerics and punctuation-only)
+     
+     if (for_analysis[entry, "PERSON"] == "Her") {
+          for (w in txt) {
+               if (w %in% ET$Word) {
+                    ET[ET$Word == w,"Count"] = 
+                         ET[ET$Word == w, "Count"] + 1
+               } else {
+                    ET = rbind(ET,
+                               data.frame("Word" = w,
+                                          "Count" = 1))
+               }
+          }
+     } else {
+          for (w in txt) {
+               if (w %in% AC$Word) {
+                    AC[AC$Word == w,"Count"] = 
+                         AC[AC$Word == w, "Count"] + 1
+               } else {
+                    AC = rbind(AC,
+                               data.frame("Word" = w,
+                                          "Count" = 1))
+               }
+          }
+     }
+}
+AC = AC[AC$Word != "",]
+ET = ET[ET$Word != "",]
+
+# Restructure:
+AC = rename(AC, "Him" = "Count")
+ET = rename(ET, "Her" = "Count")
+
+LDR_words = merge(AC, ET, by = "Word", all = TRUE)
+LDR_words = LDR_words %>%
+     rowwise() %>%
+     mutate(Word = as.character(Word),
+            Him = ifelse(is.na(Him), 0, Him),
+            Her = ifelse(is.na(Her), 0, Her),
+            Total = Him + Her) %>%
+     as.data.frame()
+```
+
+```{r remove_singles_and_stopwords, eval=run_chunks[["curate_word"]]}
+cat(paste("Number of unique words in text history:", nrow(LDR_words)))
+cat("\n\n")
+
+I = LDR_words[LDR_words$Word == "i",]
+
+# Remove single letter words (mostly leftovers from smilies)
+singles = LDR_words[nchar(LDR_words$Word) <= 1,]
+LDR_words = LDR_words[nchar(LDR_words$Word) > 1,]
+cat(paste("Number of unique words in text history with more than 1 character:",
+          nrow(LDR_words)))
+cat("\n\n")
+
+# Remove stopwords
+LDR_stopwords = LDR_words[LDR_words$Word %in% stopwords("en"),]
+LDR_words = LDR_words[!LDR_words$Word %in% stopwords("en"),]
+cat(paste("Number of unique words in text history after removing stopwords:",
+          nrow(LDR_words)))
+cat("\n\n")
+
+if (rewrite) {
+     write.csv(LDR_words, file = "LDR_word_freq.csv", row.names = FALSE)
+}
+```
+
+## Top 10 words typed (Total)
+```{r load_ldr_words, eval=run_chunks[["plot_word"]]}
+LDR_words = read.csv("LDR_word_freq.csv", stringsAsFactors = FALSE)
+```
+
+```{r top_words, eval=run_chunks[["plot_word"]]}
+p = ggplot(data = LDR_words[,c("Word","Total")] %>%
+                .[order(.$Total, decreasing = TRUE),] %>%
+                .[1:10,],
+           aes(x = reorder(Word, -Total), y = Total)) + 
+     geom_bar(stat = "identity") +
+     xlab("Word") +
+     ylab("Number of appearances") +
+     ggtitle("Most typed words (Both people)")
+
+print(p)
+```
+
+## Top 10 words typed by Him
+```{r top_words_him, eval=run_chunks[["plot_word"]]}
+p = ggplot(data = LDR_words[,c("Word","Him")] %>%
+                .[order(.$Him, decreasing = TRUE),] %>%
+                .[1:10,],
+           aes(x = reorder(Word, -Him), y = Him)) + 
+     geom_bar(stat = "identity", fill = "lightcoral") +
+     xlab("Word") +
+     ylab("Number of appearances") +
+     ggtitle("Most typed words by Him")
+
+print(p)
+```
+
+## Top 10 words typed by Her
+```{r top_words_her, eval=run_chunks[["plot_word"]]}
+p = ggplot(data = LDR_words[,c("Word","Her")] %>%
+                .[order(.$Her, decreasing = TRUE),] %>%
+                .[1:10,],
+           aes(x = reorder(Word, -Her), y = Her)) + 
+     geom_bar(stat = "identity", fill = "cornflowerblue") + #lightseagreen
+     xlab("Word") +
+     ylab("Number of appearances") +
+     ggtitle("Most typed words by Her")
+
+print(p)
+```
+
+## Word cloud of top 50 words
+```{r word_cloud, eval=run_chunks[["plot_word"]]}
+wordcloud(words = LDR_words$Word,
+          freq = LDR_words$Total,
+          min.freq = 1,
+          max.words = 100,
+          random.order = FALSE,
+          rot.per = 0,
+          colors = brewer.pal(8, "Dark2")
+)
+```
+
+## Word cloud based on word length
+```{r word_cloud_length, eval=run_chunks[["plot_word"]]}
+min_length = 5
+cut_LDR_words = LDR_words[nchar(LDR_words$Word) >= min_length,]
+
+wordcloud(words = cut_LDR_words$Word,
+          freq = cut_LDR_words$Total,
+          min.freq = 1,
+          max.words = 50,
+          random.order = FALSE,
+          rot.per = 0,
+          colors = brewer.pal(8, "Dark2")
+)
+```
+
+# Additional Corpus curation
+
+# Session Info
+```{r session_info}
+sessionInfo()
+```

@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1538542338985.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1759176347",
+    "id" : "28706126",
+    "lastKnownWriteTime" : 1539237437,
+    "last_content_update" : 1539317530167,
+    "path" : "E:/Dropbox/DS/AC_ET_LDR/LDR_analysis.Rmd",
+    "project_path" : "LDR_analysis.Rmd",
+    "properties" : {
+        "chunk_output_type" : "inline",
+        "cursorPosition" : "313,35",
+        "docOutlineVisible" : "1",
+        "scrollLine" : "283",
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

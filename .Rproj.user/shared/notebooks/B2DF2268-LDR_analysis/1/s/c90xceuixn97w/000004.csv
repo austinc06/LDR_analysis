@@ -1,0 +1,11 @@
+"0","```r
+ggplot(data = group_by(for_analysis, PERSON, YEAR) %>%
+            summarise(mean_chars = mean(num_char)),
+       aes(x = YEAR, y = mean_chars, color = PERSON)) +
+     geom_point() +
+     geom_line() +
+     expand_limits(y = 0) +
+     xlab(\"Year\") +
+     ylab(\"Average number of characters per text\") +
+     ggtitle(\"Average number of characters per text by year\")
+```"
